@@ -1,0 +1,19 @@
+{
+  "enabled": false,
+  "idle_seconds": 600,
+  "rename_cooldown_seconds": 3600,
+  "poll_seconds": 15,
+  "first_messages": 10,
+  "last_messages": 20,
+  "max_message_chars": 2000,
+  "max_title_chars": 80,
+  "title_model": "",
+  "responses_url": "https://api.openai.com/v1/responses",
+  "api_key_env": "OPENAI_API_KEY",
+  "model_timeout_seconds": 45,
+  "max_output_tokens": 1024,
+  "rpc_timeout_seconds": 15,
+  "app_server_socket": "",
+  "app_server_command": null,
+  "preserve_manual_titles": true
+}

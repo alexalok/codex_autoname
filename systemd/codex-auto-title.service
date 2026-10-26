@@ -1,0 +1,14 @@
+[Unit]
+Description=Generate Codex chat titles after responses and inactivity
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/codex-auto-title/.venv/bin/python %h/.local/share/codex-auto-title/scripts/auto_title.py worker
+EnvironmentFile=-%h/.config/codex-auto-title/worker.env
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

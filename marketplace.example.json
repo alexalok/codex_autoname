@@ -1,0 +1,12 @@
+{
+  "name": "local-auto-title",
+  "interface": {"displayName": "Local Auto Title"},
+  "plugins": [
+    {
+      "name": "codex-auto-title",
+      "source": {"source": "local", "path": "./.local/share/codex-auto-title"},
+      "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+      "category": "Productivity"
+    }
+  ]
+}

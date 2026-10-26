@@ -1,0 +1,9 @@
+{
+  "description": "Queue chat activity for the auto-title worker. No model calls run inside hooks.",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/scripts/auto_title.py\" hook", "timeout": 3}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/scripts/auto_title.py\" hook", "timeout": 3}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/scripts/auto_title.py\" hook", "timeout": 3}]}],
+    "Interrupt": [{"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/scripts/auto_title.py\" hook", "timeout": 3}]}]
+  }
+}
