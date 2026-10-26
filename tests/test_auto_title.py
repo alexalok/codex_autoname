@@ -426,6 +426,69 @@ class ProviderTests(unittest.TestCase):
                 auto.Config(responses_url=url).validate()
         auto.Config(responses_url="http://localhost:9000/v1/responses").validate()
 
+    def test_codex_command_uses_native_ephemeral_auth_and_disables_integrations(self):
+        with patch.object(auto, "configured_mcp_servers", return_value=["honcho", "camofox"]):
+            command = auto.codex_title_command(auto.Config(title_model="configured-model"), Path("/tmp/title-test"))
+        self.assertIn("--ephemeral", command)
+        self.assertIn("--no-daemon", command)
+        self.assertEqual("read-only", command[command.index("--sandbox") + 1])
+        self.assertNotIn("--ignore-user-config", command)
+        self.assertNotIn("resume", command)
+        self.assertIn("mcp_servers.honcho.enabled=false", command)
+        self.assertIn("mcp_servers.camofox.enabled=false", command)
+        self.assertIn('history.persistence="none"', command)
+        self.assertIn("project_doc_max_bytes=0", command)
+        self.assertIn("memories.use_memories=false", command)
+        self.assertIn("--output-schema", command)
+
+    def test_codex_backend_requires_completed_turn_and_schema_output(self):
+        class Process:
+            returncode = 0
+            pid = 12345
+            def __init__(self, command, **kwargs):
+                self.command = command
+                self.env = kwargs["env"]
+            def communicate(self, prompt=None, timeout=None):
+                self.prompt = prompt
+                output = Path(self.command[self.command.index("--output-last-message") + 1])
+                output.write_text(json.dumps({"title": "Automatic conversation naming"}))
+                return '{"type":"turn.completed"}\n', ""
+        processes = []
+        def spawn(*args, **kwargs):
+            process = Process(*args, **kwargs)
+            processes.append(process)
+            return process
+        config = auto.Config(title_backend="codex", title_model="configured-model")
+        with patch.object(auto.subprocess, "Popen", side_effect=spawn), \
+             patch.object(auto, "configured_mcp_servers", return_value=[]), \
+             patch.dict("os.environ", {"CODEX_THREAD_ID": "parent", "CODEX_TURN_ID": "parent-turn"}):
+            title = auto.TitleModel(config).generate([{"role": "user", "text": "Name this chat"}], True)
+        self.assertEqual("Automatic conversation naming", title)
+        self.assertNotIn("CODEX_THREAD_ID", processes[0].env)
+        self.assertNotIn("CODEX_TURN_ID", processes[0].env)
+        self.assertIn("Name this chat", processes[0].prompt)
+        self.assertFalse(Path(processes[0].command[processes[0].command.index("--cd") + 1]).exists())
+
+    def test_codex_backend_rejects_partial_success_exit(self):
+        process = unittest.mock.Mock(returncode=0)
+        process.communicate.return_value = ('{"type":"turn.started"}\n', "")
+        config = auto.Config(title_backend="codex", title_model="configured-model")
+        with patch.object(auto.subprocess, "Popen", return_value=process), \
+             patch.object(auto, "configured_mcp_servers", return_value=[]), \
+             self.assertRaisesRegex(RuntimeError, "did not complete"):
+            auto.TitleModel(config).generate([], True)
+
+    def test_codex_timeout_terminates_process_group(self):
+        process = unittest.mock.Mock(pid=12345)
+        process.communicate.side_effect = [auto.subprocess.TimeoutExpired("codex", 1), ("", "")]
+        config = auto.Config(title_backend="codex", title_model="configured-model", model_timeout_seconds=1)
+        with patch.object(auto.subprocess, "Popen", return_value=process), \
+             patch.object(auto, "configured_mcp_servers", return_value=[]), \
+             patch.object(auto.os, "killpg") as kill, \
+             self.assertRaisesRegex(RuntimeError, "timed out"):
+            auto.TitleModel(config).generate([], True)
+        kill.assert_called_once_with(12345, auto.signal.SIGTERM)
+
 
 class TransportTests(unittest.TestCase):
     def test_real_subprocess_handshake_and_notification_interleaving(self):

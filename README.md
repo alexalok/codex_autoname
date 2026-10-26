@@ -1,8 +1,9 @@
 # Codex Auto Title
 
 A working prototype of a local Codex plugin plus a background title worker.
-It is packaged for **new Codex chats on one Linux host, under one OS account**.
-It has not been installed or enabled on the host used to develop it.
+It handles **new Codex chats on one Linux host**, with separate configuration,
+state, credentials, and workers for each enabled OS account. It supports either
+a personal installation or shared system-wide files with per-user activation.
 
 ## Behavior
 
@@ -60,19 +61,84 @@ Codex SessionStart / UserPromptSubmit / Stop / Interrupt
 ```
 
 Hooks do not call the model, hold an idle timer, read transcript files, or inject
-extra conversation context. The worker uses the running Codex app-server; it
-does not resume chats, create hidden chats, or modify Codex's database files.
+extra conversation context. The worker uses the running Codex app-server for
+chat metadata and renames. It does not resume target chats or modify Codex's
+database files.
 
-The title backend is an independently configured **Responses API** model. The
-default endpoint is OpenAI. A local Responses-compatible endpoint is also
-supported. There is no default model or embedded credential. A ChatGPT/Codex
-subscription alone does not configure this API backend.
+Two title backends are available:
 
-## Installation
+- `title_backend: "codex"` uses the existing user's Codex login and provider
+  through `codex exec --ephemeral`. Each request is a fresh temporary run with
+  structured title output. Hooks, native memories, history persistence, apps,
+  plugins, shell/browser tools, and locally configured MCP integrations are
+  disabled for those runs. No credential extraction or separate API key is
+  needed. Existing provider/auth configuration is preserved.
+- `title_backend: "responses"` calls a configured Responses API endpoint.
+  Its default endpoint is OpenAI; localhost-compatible servers are supported.
+  This backend requires separate API authentication where applicable.
+
+There is no embedded credential or model fallback. Set `title_model` explicitly.
+The example configuration selects the Codex backend; old configurations without
+`title_backend` retain the Responses backend for compatibility.
+
+## Shared system installation
+
+The installer places shared, root-owned code under `/opt/codex-autoname`, adds
+a local marketplace and a **disabled** plugin default to
+`/etc/codex/config.toml`, and installs a user-service unit under
+`/etc/systemd/user`. It preserves unrelated system configuration and backs up
+files it changes. It does not enable the plugin or service for any account.
+
+With Python's `venv`/`pip` support available, an administrator runs:
+
+```bash
+sudo python3 scripts/install_global.py --enable-linger codex
+```
+
+On Debian/Ubuntu, install `python3-venv` first if required. `--enable-linger`
+keeps only the named user's service manager running after logout; omit it when
+the account already has an appropriate lifecycle. Installation creates an
+isolated virtual environment and installs `requirements.txt` there.
+
+Then, **as the user to enable**, install the plugin through Codex's own CLI:
+
+```bash
+codex plugin add codex-auto-title@codex-autoname
+mkdir -p ~/.config/codex-auto-title
+cp -n /opt/codex-autoname/plugin/config.example.json ~/.config/codex-auto-title/config.json
+```
+
+Set `enabled: true`, `title_backend: "codex"`, and a model available to that
+account (for example `gpt-6-luna`). Set `codex_command` to the installed Codex
+launcher if the service's PATH does not find it. Use `/hooks` to review/trust
+the installed plugin's four hooks; installation does not bypass hook trust.
+
+```bash
+/opt/codex-autoname/.venv/bin/python /opt/codex-autoname/plugin/scripts/auto_title.py doctor
+systemctl --user daemon-reload
+systemctl --user enable --now codex-auto-title.service
+```
+
+Run those activation commands only under `codex` to enable only that account.
+Other users receive the disabled system default and no enabled service.
+Each user can be enabled separately later. Do not use `systemctl --global
+enable`, which would enable the service for every user manager.
+
+To inspect the installation without root or system changes, run:
+
+```bash
+python3 scripts/install_global.py --staging-root /tmp/codex-autoname-staging
+```
+
+## Personal installation
 
 Requires Python 3.11+, the `websockets` dependency, a running local Codex
 app-server with Unix WebSocket and paginated thread APIs, and supported/trusted
 lifecycle hooks. Development verified the read APIs against Codex CLI 0.164.0.
+The package uses the documented `.codex-plugin/plugin.json` compatibility
+manifest because this installed version reads portable manifest metadata but
+does not discover hooks from portable manifests. Native `plugin/read` checks
+confirmed hook discovery with the compatibility layout.
 
 Copy this directory to a permanent location such as
 `~/.local/share/codex-auto-title`. From that installed directory:
@@ -91,13 +157,15 @@ the worker's virtual environment supplies `websockets`.
 Edit `~/.config/codex-auto-title/config.json`:
 
 - Set `enabled` to `true`.
-- Set `title_model` to a model available to your chosen API account/server.
+- Set `title_model` to a model available to the user's Codex login or API backend.
+- For `title_backend: "codex"`, set `codex_command` if the launcher is not on
+  PATH. `codex_reasoning_effort` defaults to `low`.
 - Keep the timing/window defaults or adjust them.
 - Leave `app_server_socket` empty to use
   `${CODEX_HOME:-~/.codex}/app-server-control/app-server-control.sock`.
   Set it explicitly if your daemon uses a different socket.
 
-For the OpenAI endpoint, provide `OPENAI_API_KEY` in the **worker's** environment.
+For the Responses backend's OpenAI endpoint, provide `OPENAI_API_KEY` in the **worker's** environment.
 Do not put credentials in the plugin manifest or configuration JSON. For a
 systemd service, a private file at
 `~/.config/codex-auto-title/worker.env` can contain the environment assignment.
@@ -119,8 +187,8 @@ Check the connection before starting the worker:
 .venv/bin/python scripts/auto_title.py worker --once --dry-run
 ```
 
-`doctor` only checks connectivity and reports whether model configuration and
-an API-key environment variable are present; it does not use the key or call a
+`doctor` only checks connectivity and reports the selected backend, whether model
+configuration and an API-key environment variable are present; it does not use the key or call a
 model. `--dry-run` reads eligible chat samples but neither calls the model nor
 renames chats. It emits counts and IDs, not message content. A new installation
 with no enrolled completed chat will produce no dry-run candidates.
@@ -204,9 +272,10 @@ titles mark the revision evaluated without issuing a rename.
   messages are visibly truncated in the model input. Images/attachments are
   not sent; a textless image-only exchange may not produce an initial title.
 - The separate local state stores IDs, times, hashes, and title metadata, not
-  message bodies. Selected message text is sent to the configured model
-  endpoint with `store: false`; that flag does not override provider retention
-  policies. The implementation makes no Honcho requests.
+  message bodies. Selected text goes to the configured model. The Codex backend
+  uses native ephemeral runs and temporary private files removed afterward;
+  the Responses backend sets `store: false`. These controls do not override
+  provider retention policies. The implementation makes no Honcho requests.
 - This is a manually installed local plugin. Official documentation currently
   excludes plugins containing lifecycle hooks from the public plugin directory.
 
@@ -216,15 +285,18 @@ titles mark the revision evaluated without issuing a rename.
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The 34 tests cover sampling/pagination/overlap, completed-turn gating, idle and
+The 43 tests cover sampling/pagination/overlap, completed-turn gating, idle and
 cooldown boundaries, unchanged chats, manual changes, stale generation,
 restart/crash recovery, bounded retries, dry runs, model request shape, and
-transport handling. Regression cases also cover pending later turns during
+transport handling, the ephemeral backend's completion and timeout behavior,
+and shared installation defaults/idempotence. Regression cases also cover pending later turns during
 initial naming, interrupted responses, and the initial-title unpause cooldown.
 An end-to-end test uses a real local Unix WebSocket server
 and HTTP title endpoint with synthetic messages. Live read-only checks also
 verified initialization, listing, metadata, and turn-status reads against the
-running Codex host. No real model call or real title mutation was made.
+running Codex host. A live synthetic title request also succeeded using the
+existing Codex login, `gpt-6-luna`, low effort, and native ephemeral execution.
+Actual title mutation and installed hook delivery still require activation testing.
 
 Official references:
 
